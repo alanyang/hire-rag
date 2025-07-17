@@ -64,6 +64,8 @@ async def mean_embedding_data(last_id: int, limit: int = 10) -> int:
         if rows:
             for row in rows:
                 nearest_id = row[0]
+                if not nearest_id or not row[1]:
+                    continue
                 id = str(row[0])
                 doc = f"{row[1]}\nCategory: {row[4]}\n Company:{row[5]} \n {row[2]} {row[3]}"
                 # 分段
@@ -77,7 +79,7 @@ async def mean_embedding_data(last_id: int, limit: int = 10) -> int:
                 ids.append(id)
                 docs.append(row[1])  # 原始文档name
                 embeddings.append(embedding)
-                print(f"Prepared document {id}")
+                print(f"Prepared document {id} {row[1]}")
 
             # 批量写入
             col.add(ids=ids, documents=docs, embeddings=embeddings)
@@ -97,6 +99,7 @@ async def main():
     last_id = 1
     while last_id < 200:
         last_id = await mean_embedding_data(last_id=last_id, limit=3)
+        print(f"last_id: {last_id}")
 
 
 if __name__ == "__main__":

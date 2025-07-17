@@ -7,7 +7,14 @@ from chromadb import PersistentClient
 from openai import AsyncOpenAI
 
 
-llm = AsyncOpenAI()
+api_key = os.getenv("QWEN_API_KEY")
+base_url = os.getenv("QWEN_BASE_URL")
+if not api_key or not base_url:
+    print("QWEN_API_KEY or QWEN_URL is not set")
+    quit()
+
+llm = AsyncOpenAI(api_key=api_key, base_url=base_url)
+model = "text-embedding-v4"
 
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
@@ -18,10 +25,7 @@ async def query(input: str, top_k: int = 5) -> tuple[list[int], list[str]] | Non
     path = "/app/blueapex" if env == "production" else "/root/develop/rag/blueapex"
     db = PersistentClient(path=path)
     col = db.get_or_create_collection("hire")
-    resp = await llm.embeddings.create(
-        input=input,
-        model="text-embedding-3-small",
-    )
+    resp = await llm.embeddings.create(input=input, model=model)
     if resp.data:
         embedding = resp.data[0].embedding
         loop = asyncio.get_running_loop()
