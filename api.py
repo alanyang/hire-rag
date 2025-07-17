@@ -1,5 +1,4 @@
 import asyncio
-from typing import Annotated, List
 from pydantic import BaseModel, Field
 
 from fastapi import FastAPI
@@ -31,7 +30,7 @@ async def search(s: str):
     if r:
         ids, names = r
         return {"ids": ids, "names": names}
-    return "No results found"
+    return {"code": 3, "error": "No results found"}
 
 
 @app.post("/embedding")
@@ -40,7 +39,7 @@ async def embedding(model: EmbeddingModel):
     tensor = await remote_embedding(doc)
 
     async def add_wrapper(
-        ids: List[str], documents: List[str], embeddings: List[float]
+        ids: list[str], documents: list[str], embeddings: list[float]
     ):
         return col.add(ids=ids, documents=documents, embeddings=embeddings)
 
