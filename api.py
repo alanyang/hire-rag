@@ -25,8 +25,8 @@ class EmbeddingModel(BaseModel):
 
 
 @app.get("/search")
-async def search(s: str):
-    r = await query(input=s, top_k=3)
+async def search(s: str, n: int = 5):
+    r = await query(input=s, top_k=n)
     if r:
         ids, names = r
         return {"ids": ids, "names": names}
