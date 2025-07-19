@@ -3,16 +3,16 @@ import logging
 import uvloop
 import httpx
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import AsyncGenerator
-from typing import cast, Any, Literal
+from typing import cast, Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from returns.context import RequiresContext
-from returns.future import Future, FutureResult, future_safe, FutureResultE, future
-from returns.result import Success, ResultE, safe, Failure
-from returns.io import IO, IOResult
+from returns.future import Future, FutureResult, future_safe, FutureResultE
+from returns.result import Success, ResultE, safe, Failure, Result
+from returns.io import IO, IOResult, IOSuccess, IOFailure
 from toolz.curried import filter, map, pipe
 from toolz.dicttoolz import get_in
 
@@ -29,96 +29,129 @@ class Tool(BaseModel):
 
 class ToolCall(BaseModel):
     id: str = Field(..., description="The id of the tool call")
-    type: Literal["function"] = "function"
-    function: Tool
+    type: Literal["function"] = Field(
+        default="function", description="The type of event"
+    )
+    function: Tool = Field(..., description="The tool call")
 
 
-class Event(BaseModel):
+class StreamEvent(BaseModel):
     name: Literal["chunk", "finish", "error"]
     tool: Tool | None = None
     error: str | None = None
     chunks: list[str] = []
 
 
+@dataclass
+class CompletionsResult:
+    queue: asyncio.Queue[StreamEvent | None]
+    content: str = ""
+
+
+@future_safe
 async def stream_completion(
-    input="What's the weather like in Los Angeles today?",
-) -> AsyncGenerator[Event, str]:
-    try:
-        stream = await llm.chat.completions.create(
-            model="gpt-4.1",
-            stream=True,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant.",
-                },
-                {
-                    "role": "user",
-                    "content": input,
-                },
-            ],
-            tool_choice="auto",
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get the weather of a city",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "city": {
-                                    "type": "string",
-                                    "description": "The city name",
-                                },
-                                "date": {
-                                    "type": "string",
-                                    "description": "The date",
-                                },
+    input,
+):
+    stream = await llm.chat.completions.create(
+        model="gpt-4.1",
+        stream=True,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+            },
+            {
+                "role": "user",
+                "content": input,
+            },
+        ],
+        tool_choice="auto",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather of a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "The city name",
                             },
-                            "required": ["city", "date"],
+                            "date": {
+                                "type": "string",
+                                "description": "The date",
+                            },
                         },
+                        "required": ["city", "date"],
                     },
-                }
-            ],
-        )
-        assembled_tool_calls: dict[int, ToolCall] = {}
-        async for chunk in stream:
-            tool_calls = chunk.choices[0].delta.tool_calls
-            if tool_calls is None:
-                continue
-            # print(tool_calls)
-            pieces = [tool_call.to_json() for tool_call in tool_calls]
-            yield Event(name="chunk", chunks=pieces)
-            for tool_call in tool_calls:
-                if tool_call.index not in assembled_tool_calls:
-                    assembled_tool_calls[tool_call.index] = ToolCall(
-                        id="",
-                        function=Tool(name="", arguments_string="", arguments={}),
-                    )
+                },
+            }
+        ],
+    )
+    queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+    assembled_tool_calls: dict[int, ToolCall] = {}
+    result: str = ""
+    async for chunk in stream:
+        tool_calls = chunk.choices[0].delta.tool_calls or []
+        content = chunk.choices[0].delta.content
+        if tool_calls is None and not content:
+            raise Exception("No tool calls or content in chunk")
+        pieces = [tool_call.to_json() for tool_call in tool_calls]
+        if content:
+            result += content
+        await queue.put(StreamEvent(name="chunk", chunks=pieces))
+        for tool_call in tool_calls:
+            if tool_call.index not in assembled_tool_calls:
+                assembled_tool_calls[tool_call.index] = ToolCall(
+                    id="",
+                    function=Tool(name="", arguments_string="", arguments={}),
+                )
 
-                if tool_call.id:
-                    assembled_tool_calls[tool_call.index].id += tool_call.id
-                if tool_call.function:
-                    if tool_call.function.name:
-                        assembled_tool_calls[
-                            tool_call.index
-                        ].function.name += tool_call.function.name
-                    if tool_call.function.arguments:
-                        assembled_tool_calls[
-                            tool_call.index
-                        ].function.arguments_string += tool_call.function.arguments
+            if tool_call.id:
+                assembled_tool_calls[tool_call.index].id += tool_call.id
+            if tool_call.function:
+                if tool_call.function.name:
+                    assembled_tool_calls[
+                        tool_call.index
+                    ].function.name += tool_call.function.name
+                if tool_call.function.arguments:
+                    assembled_tool_calls[
+                        tool_call.index
+                    ].function.arguments_string += tool_call.function.arguments
 
-        for tool_call in assembled_tool_calls.values():
-            arguments_result = safe(json.loads)(tool_call.function.arguments_string)
-            match arguments_result:
-                case Success(arguments):
-                    tool_call.function.arguments = arguments
-                    yield Event(name="finish", tool=tool_call.function)
-                case Failure(error):
-                    yield Event(name="error", error=str(error))
-    except Exception as e:
-        yield Event(name="error", error=str(e))
+    for tool_call in assembled_tool_calls.values():
+        arguments_result = safe(json.loads)(tool_call.function.arguments_string)
+        match arguments_result:
+            case Success(arguments):
+                tool_call.function.arguments = arguments
+                await queue.put(StreamEvent(name="finish", tool=tool_call.function))
+            case Failure(error):
+                await queue.put(StreamEvent(name="error", error=str(error)))
+    await queue.put(None)  # Signal the end of the stream
+    return CompletionsResult(
+        queue=queue,
+        content=result
+        or "Today is a great day to learn something new!",  # Default content if empty
+    )
+
+
+@future_safe
+async def observe(queue: asyncio.Queue[StreamEvent | None], content: str) -> str:
+    while True:
+        event = await queue.get()
+        if not event:
+            break
+        match event:
+            case StreamEvent(name="chunk", chunks=chunks):
+                print("Received chunk:", chunks)
+            case StreamEvent(name="finish", tool=Tool() as tool):
+                print("Tool call finished:", tool)
+            case StreamEvent(name="error", error=error):
+                print("Error in tool call:", error)
+
+    return content
 
 
 @future_safe
@@ -161,8 +194,18 @@ async def fetch_posts() -> list[Post]:
 
 
 async def main():
-    async for num in stream_completion():
-        print(num)
+    content = (
+        await stream_completion("Tell me about the weather in New York on 2023-10-01")
+        .bind(lambda v: observe(v.queue, v.content))
+        .awaitable()
+    )
+
+    match content:
+        case IOSuccess(v):
+            print("Final content:", v.value_or(""))
+        case IOFailure(e):
+            print("Error occurred:", e)
+
     a = (
         await fetch_user_info(1)
         .map(lambda v: cast(str, get_in(["contact", "phone"], v)))
