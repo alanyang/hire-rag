@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 api_key = os.getenv("QWEN_API_KEY")
 base_url = os.getenv("QWEN_BASE_URL")
 if not api_key or not base_url:
-    print("QWEN_API_KEY or QWEN_URL is not set")
+    print("QWEN_API_KEY or QWEN_BASE_URL is not set")
     quit()
 
 llm = AsyncOpenAI(api_key=api_key, base_url=base_url)

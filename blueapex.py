@@ -96,7 +96,7 @@ async def mean_embedding_data(last_id: int, limit: int = 10) -> int:
 
 async def main():
     last_id = 1
-    while last_id < 200:
+    while last_id < 300:
         last_id = await mean_embedding_data(last_id=last_id, limit=3)
         print(f"last_id: {last_id}")
 
