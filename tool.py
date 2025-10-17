@@ -1,11 +1,12 @@
 import asyncio
 import inspect
+from collections.abc import Awaitable, Callable, Coroutine, Generator
 from dataclasses import dataclass
-from collections.abc import Callable, Awaitable, Coroutine, Generator
-from typing import overload, TypeVar, Generic, cast, Any
+from typing import Any, Generic, TypeVar, cast, get_type_hints, overload
+
 from pydantic import BaseModel
-from returns.future import future_safe, FutureResultE
 from returns.context import RequiresContext
+from returns.future import FutureResultE, future_safe
 
 type ToolCallReturn = BaseModel | str
 
@@ -130,8 +131,8 @@ def tool(
 
 def tool[PType: BaseModel, RType](
     func: ToolCall[PType, RType] | None = None,
-    *,
     name: str | None = None,
+    *,
     description: str | None = None,
     timeout: float = 0.0,
 ) -> SafeTool[RType] | Callable[[ToolCall[PType, RType]], SafeTool[RType]]:
@@ -139,11 +140,20 @@ def tool[PType: BaseModel, RType](
 
     def create(f: ToolCall) -> SafeTool[RType]:
         signs = inspect.signature(f)
-        if len(signs.parameters) > 2:
-            raise ValueError("Tool functions must have at most one parameter")
-        first_param = next(iter(signs.parameters.values()), None)
+        valid_params = [
+            p
+            for p in signs.parameters.values()
+            if p.POSITIONAL_ONLY or p.POSITIONAL_OR_KEYWORD
+        ]
+        if len(valid_params) > 2:
+            raise ValueError(
+                "Tool functions must have at most two optional parameters, BaseModel object for logic and Context"
+            )
+        first_param = next(iter(valid_params), None)
+        param_type: Any = None
         if first_param:
-            param_type = first_param.annotation
+            hints = get_type_hints(f)
+            param_type = hints.get(first_param.name, None) or first_param.annotation
             if param_type == inspect.Signature.empty:
                 raise ValueError("Tool functions must have a type annotation")
             if not isinstance(param_type, type) or not issubclass(
@@ -157,9 +167,7 @@ def tool[PType: BaseModel, RType](
             "function": {
                 "name": name or f.__name__,
                 "description": description or inspect.getdoc(func),
-                "parameters": first_param.annotation.model_json_schema()
-                if first_param
-                else {},
+                "parameters": param_type.model_json_schema() if param_type else {},
             },
         }
         tool: Tool[RType] = Tool(
@@ -169,10 +177,7 @@ def tool[PType: BaseModel, RType](
         )
         return safe_tool(tool)
 
-    if func is None:
-        return create
-    else:
-        return create(func)
+    return create(func) if func is not None else create
 
 
 def safe_tool(tool: Tool[RType] | SafeTool[RType]) -> SafeTool[RType]:

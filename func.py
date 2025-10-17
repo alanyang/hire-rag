@@ -1,18 +1,17 @@
 import asyncio
-import logging
-import uvloop
-import httpx
 import json
-from dataclasses import dataclass, field
-from collections.abc import AsyncGenerator
-from typing import cast, Literal
+import logging
+from dataclasses import dataclass
+from typing import Literal, cast
 
+import httpx
+import uvloop
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from returns.context import RequiresContext
-from returns.future import Future, FutureResult, future_safe, FutureResultE
-from returns.result import Success, ResultE, safe, Failure, Result
-from returns.io import IO, IOResult, IOSuccess, IOFailure
+from returns.future import Future, FutureResult, FutureResultE, future_safe
+from returns.io import IO, IOFailure, IOResult, IOSuccess
+from returns.result import Failure, ResultE, Success, safe
 from toolz.curried import filter, map, pipe
 from toolz.dicttoolz import get_in
 
@@ -278,5 +277,9 @@ if __name__ == "__main__":
             list,
         )
     )
+    ps = pipe(products, map(lambda v: {**v, "pricing": 1000}), list)
+    print(ps)
+
+    pipe(products, filter(lambda v: True), map(lambda v: {**v, "age": 11}), list)
 
     asyncio.run(main())

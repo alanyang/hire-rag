@@ -3,7 +3,6 @@ import asyncio
 import aiomysql
 import numpy as np
 from chromadb import PersistentClient
-# from sentence_transformers import SentenceTransformer
 
 from remote import remote_embedding
 
